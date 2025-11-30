@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản lý Bãi Đỗ Xe - Camera System</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container { max-width: 1600px; margin: 0 auto; }
+        .header {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .header h1 { color: #333; font-size: 32px; margin-bottom: 10px; }
+        .header .subtitle { color: #666; font-size: 14px; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .stat-card .label { color: #888; font-size: 13px; margin-bottom: 10px; text-transform: uppercase; }
+        .stat-card .value { color: #333; font-size: 32px; font-weight: bold; }
+        .stat-card.total { border-left: 5px solid #3498db; }
+        .stat-card.locations { border-left: 5px solid #e74c3c; }
+        .stat-card.vehicles { border-left: 5px solid #f39c12; }
+        .stat-card.available { border-left: 5px solid #2ecc71; }
+        .stat-card.revenue { border-left: 5px solid #9b59b6; }
+        
+        .floor-overview {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .floors-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        .floor-card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            border: 2px solid #e0e0e0;
+        }
+        .floor-card .floor-name { font-size: 24px; font-weight: bold; color: #667eea; }
+        .progress-bar { background: #e0e0e0; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 10px; }
+        .progress-fill { background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; transition: width 0.5s; }
+        
+        .vehicles-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn:hover { background: #764ba2; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        thead { background: #f8f9fa; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid #f0f0f0; }
+        tbody tr:hover { background: #f8f9fa; }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-PARKED { background: #e8f5e9; color: #388e3c; }
+        .status-MOVING { background: #fff3e0; color: #f57c00; }
+        
+        .info-badge {
+            display: inline-block;
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            margin-left: 5px;
+        }
+        
+        .error-box {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            color: #c62828;
+        }
+        
+        .note-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            color: #1565c0;
+            font-size: 14px;
+        }
+
+        .header .price-control {
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .header .price-control input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            width: 120px;
+        }
+
+        .header .price-control button {
+            padding: 8px 16px;
+            background: #2ecc71;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .header .price-control button:hover {
+            background: #27ae60;
+        }
+
+        .checkout-btn {
+            background: #e74c3c !important;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .checkout-btn:hover {
+            background: #c0392b !important;
+        }
+
+        .checkout-btn:disabled {
+            background: #95a5a6 !important;
+            cursor: not-allowed;
+        }
+
+        .status-EXITING {
+            background: #ffebee;
+            color: #c62828;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🎥 Hệ thống Quản lý Bãi Đỗ Xe - Camera Based</h1>
+            <div class="subtitle">
+                Cập nhật: <span id="lastUpdate">-</span> • 
+                GroupBy (location, license_plate)
+            </div>
+            <div class="price-control">
+                <label><strong>Giá hiện tại:</strong></label>
+                <input type="number" id="priceInput" value="5000" min="1000" step="1000">
+                <span>VND / 10 phút</span>
+                <button onclick="updatePrice()">💾 Cập nhật giá</button>
+                <span id="priceStatus" style="color: #2ecc71; font-size: 12px;"></span>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorMessage" style="display: none;" class="error-box"></div>
+        
+        <!-- Info Note -->
+        <div class="note-box">
+            ℹ️ <strong>Lưu ý:</strong> Một xe có thể xuất hiện ở nhiều vị trí (do di chuyển trong bãi). 
+            Mỗi vị trí được tính phí riêng từ lần PARKED đầu tiên tại vị trí đó.
+        </div>
+
+        <!-- Statistics Cards -->
+        <div class="stats-grid">
+            <div class="stat-card total">
+                <div class="label">Tổng chỗ đỗ</div>
+                <div class="value" id="statTotal">60</div>
+            </div>
+            <div class="stat-card locations">
+                <div class="label">Vị trí bị chiếm</div>
+                <div class="value" id="statOccupiedLocations">-</div>
+            </div>
+            <div class="stat-card vehicles">
+                <div class="label">Số xe trong bãi</div>
+                <div class="value" id="statUniqueVehicles">-</div>
+            </div>
+            <div class="stat-card available">
+                <div class="label">Còn trống</div>
+                <div class="value" id="statAvailable">-</div>
+            </div>
+            <div class="stat-card revenue">
+                <div class="label">Tổng doanh thu</div>
+                <div class="value" id="statRevenue">-</div>
+            </div>
+        </div>
+
+        <!-- Floor Overview -->
+        <div class="floor-overview">
+            <h2>📊 Tổng quan theo tầng</h2>
+            <div class="floors-grid" id="floorsGrid"></div>
+        </div>
+
+        <!-- Vehicles Table -->
+        <div class="vehicles-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2>🚗 Chi tiết vị trí đỗ xe (Location-based view)</h2>
+                <button class="btn" onclick="loadData()">🔄 Làm mới</button>
+            </div>
+            <div id="vehiclesTable"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000';
+        const FLOORS = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+        function formatCurrency(amount) {
+            return new Intl.NumberFormat('vi-VN', {
+                style: 'currency',
+                currency: 'VND'
+            }).format(amount);
+        }
+
+        function formatTime(minutes) {
+            const hours = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            return hours > 0 ? `${hours}h ${mins}p` : `${mins} phút`;
+        }
+
+        function getStatusText(status) {
+            const map = {
+                'PARKED': 'Đã đỗ',
+                'MOVING': 'Di chuyển',
+                'EXITING': 'Đang ra'
+            };
+            return map[status] || status;
+        }
+
+        function updateFloorOverview(vehicles) {
+            const grid = document.getElementById('floorsGrid');
+            grid.innerHTML = '';
+
+            FLOORS.forEach(floor => {
+                const count = vehicles.filter(v => v.location && v.location.startsWith(floor)).length;
+                const pct = (count / 10) * 100;
+
+                const card = document.createElement('div');
+                card.className = 'floor-card';
+                card.innerHTML = `
+                    <div class="floor-name">Tầng ${floor}</div>
+                    <div style="font-size: 14px; color: #666; margin: 10px 0;">${count} / 10 vị trí</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${pct}%"></div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function groupByVehicle(data) {
+            const grouped = {};
+            data.forEach(item => {
+                if (!item.license_plate) return;
+                
+                if (!grouped[item.license_plate]) {
+                    grouped[item.license_plate] = {
+                        license_plate: item.license_plate,
+                        locations: [],
+                        total_fee: 0
+                    };
+                }
+                
+                grouped[item.license_plate].locations.push({
+                    location: item.location,
+                    status: item.current_status,
+                    entry: item.entry_timestamp,
+                    minutes: item.parked_minutes,
+                    fee: item.total_fee
+                });
+                grouped[item.license_plate].total_fee += item.total_fee;
+            });
+            
+            return Object.values(grouped);
+        }
+
+        function updateVehiclesTable(vehicles) {
+            const container = document.getElementById('vehiclesTable');
+
+            if (vehicles.length === 0) {
+                container.innerHTML = '<p style="text-align:center; padding:40px; color:#999;">Chưa có xe trong bãi</p>';
+                return;
+            }
+
+            // Group by vehicle để hiển thị
+            const vehicleGroups = groupByVehicle(vehicles);
+
+            let html = `
+                <h3 style="margin-bottom: 15px;">📍 Xem theo vị trí (${vehicles.length} records)</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Vị trí</th>
+                            <th>Biển số</th>
+                            <th>Trạng thái</th>
+                            <th>Giờ vào (vị trí này)</th>
+                            <th>Thời gian đỗ</th>
+                            <th>Phí (vị trí này)</th>
+                            <th>Thao tác</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            vehicles.forEach(v => {
+                const isExiting = v.current_status === 'EXITING';
+                html += `
+                    <tr>
+                        <td><strong>${v.location}</strong></td>
+                        <td><strong>${v.license_plate}</strong></td>
+                        <td><span class="status-badge status-${v.current_status}">${getStatusText(v.current_status)}</span></td>
+                        <td>${v.entry_timestamp || '-'}</td>
+                        <td>${formatTime(v.parked_minutes)}</td>
+                        <td><strong>${formatCurrency(v.total_fee)}</strong></td>
+                        <td>
+                            ${isExiting ? 
+                                `<button class="checkout-btn" onclick="confirmCheckout('${v.license_plate}', '${v.location}', ${v.total_fee})">
+                                    ✅ Xác nhận thanh toán
+                                </button>` : 
+                                '<span style="color: #999;">-</span>'
+                            }
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            
+            // Add vehicle summary
+            html += `
+                <h3 style="margin-top: 30px; margin-bottom: 15px;">🚗 Tổng hợp theo xe (${vehicleGroups.length} vehicles)</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Biển số</th>
+                            <th>Số vị trí</th>
+                            <th>Chi tiết vị trí</th>
+                            <th>Tổng phí (tất cả vị trí)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            vehicleGroups.forEach(vg => {
+                const locationDetails = vg.locations.map(loc => 
+                    `${loc.location} (${formatTime(loc.minutes)}, ${formatCurrency(loc.fee)})`
+                ).join(', ');
+                
+                html += `
+                    <tr>
+                        <td><strong>${vg.license_plate}</strong></td>
+                        <td><span class="info-badge">${vg.locations.length} vị trí</span></td>
+                        <td style="font-size: 12px;">${locationDetails}</td>
+                        <td><strong style="color: #9b59b6;">${formatCurrency(vg.total_fee)}</strong></td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function loadData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/parking/status`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Hide error
+                document.getElementById('errorMessage').style.display = 'none';
+
+                // Show API error if exists
+                if (data.error) {
+                    document.getElementById('errorMessage').textContent = '⚠️ ' + data.error;
+                    document.getElementById('errorMessage').style.display = 'block';
+                }
+
+                // Update stats
+                document.getElementById('statTotal').textContent = data.stats.total;
+                document.getElementById('statOccupiedLocations').textContent = data.stats.occupied_locations;
+                document.getElementById('statUniqueVehicles').textContent = data.stats.unique_vehicles;
+                document.getElementById('statAvailable').textContent = data.stats.available;
+                document.getElementById('statRevenue').textContent = formatCurrency(data.stats.totalRevenue);
+
+                // Update last update time
+                if (data.last_update) {
+                    const time = new Date(data.last_update * 1000);
+                    document.getElementById('lastUpdate').textContent = time.toLocaleTimeString('vi-VN');
+                }
+
+                // Update floor overview
+                updateFloorOverview(data.data);
+
+                // Update vehicles table
+                updateVehiclesTable(data.data);
+
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('errorMessage').textContent = 
+                    `⚠️ Lỗi kết nối API: ${error.message}. Đảm bảo parking_api_server.py đang chạy!`;
+                document.getElementById('errorMessage').style.display = 'block';
+            }
+        }
+
+        // Load price on startup
+        async function loadPrice() {
+            try {
+                const response = await fetch(`${API_BASE}/api/parking/price`);
+                const data = await response.json();
+                if (data.price_per_10min) {
+                    document.getElementById('priceInput').value = data.price_per_10min;
+                }
+            } catch (error) {
+                console.error('Error loading price:', error);
+            }
+        }
+
+        // Update price
+        async function updatePrice() {
+            const priceInput = document.getElementById('priceInput');
+            const priceStatus = document.getElementById('priceStatus');
+            const newPrice = parseInt(priceInput.value);
+            
+            if (!newPrice || newPrice < 1000) {
+                priceStatus.textContent = '❌ Giá phải >= 1,000 VND';
+                priceStatus.style.color = '#e74c3c';
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/parking/price`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ price_per_10min: newPrice })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    priceStatus.textContent = '✓ Đã cập nhật';
+                    priceStatus.style.color = '#2ecc71';
+                    setTimeout(() => {
+                        priceStatus.textContent = '';
+                    }, 3000);
+                } else {
+                    priceStatus.textContent = '❌ Lỗi: ' + (data.error || 'Unknown error');
+                    priceStatus.style.color = '#e74c3c';
+                }
+            } catch (error) {
+                priceStatus.textContent = '❌ Lỗi kết nối';
+                priceStatus.style.color = '#e74c3c';
+                console.error('Error updating price:', error);
+            }
+        }
+
+        // Confirm checkout
+        async function confirmCheckout(licensePlate, location, totalFee) {
+            if (!confirm(`Xác nhận thanh toán cho xe ${licensePlate} tại ${location}?\nTổng phí: ${formatCurrency(totalFee)}`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/parking/checkout`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        license_plate: licensePlate,
+                        location: location
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert(`✅ Đã xác nhận thanh toán!\nXe ${licensePlate} đã được xóa khỏi hệ thống.`);
+                    // Reload data
+                    loadData();
+                } else {
+                    alert('❌ Lỗi: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('❌ Lỗi kết nối API');
+                console.error('Error confirming checkout:', error);
+            }
+        }
+
+        // Auto refresh every 5 seconds
+        loadPrice();
+        loadData();
+        setInterval(loadData, 5000);
+
+        console.log('🎥 Camera-based Parking Dashboard');
+        console.log('📊 GroupBy (location, license_plate)');
+        console.log('🔄 Auto-refresh every 5 seconds');
+    </script>
+</body>
+</html>
