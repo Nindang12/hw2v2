@@ -1,0 +1,33 @@
+{
+  "price": {
+    "price_per_10min": 5000,
+    "currency": "VND",
+    "updated_at": null
+  },
+  "parking": {
+    "total_slots": 60,
+    "slots_per_floor": 10,
+    "floors": ["A", "B", "C", "D", "E", "F"]
+  },
+  "kafka": {
+    "bootstrap_servers": "192.168.80.98:9092",
+    "topic": "parking-events",
+    "starting_offsets": "latest"
+  },
+  "spark": {
+    "master": "spark://192.168.80.98:7077",
+    "checkpoint_dir": "/tmp/checkpoint_parking",
+    "shuffle_partitions": 2,
+    "watermark_duration": "2 minutes"
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 5000,
+    "refresh_interval_seconds": 5
+  },
+  "streaming": {
+    "processing_interval_seconds": 5,
+    "console_interval_seconds": 10
+  }
+}
+

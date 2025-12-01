@@ -31,28 +31,18 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# ===========================
-# GLOBAL DATA STORAGE
-# ===========================
-latest_parking_data = {
-    "data": [],
-    "stats": {
-        "total": 60,
-        "occupied_locations": 0,  # Số vị trí bị chiếm
-        "unique_vehicles": 0,      # Số xe unique
-        "available": 60,
-        "totalRevenue": 0
-    },
-    "last_update": None,
-    "error": None
-}
-
 # Configuration files
-PRICE_CONFIG_FILE = "/opt/shared/parking_price_config.json"
+CONFIG_FILE = "/opt/shared/parking_config.json"
+LEGACY_PRICE_CONFIG_FILE = "/opt/shared/parking_price_config.json"  # Backward compatibility
 CHECKOUT_STATUS_FILE = "/opt/shared/parking_checkout_status.json"
 
-# Default price
-DEFAULT_PRICE_PER_10MIN = 5000
+# Default values
+DEFAULT_CONFIG = {
+    "price": {"price_per_10min": 5000, "currency": "VND"},
+    "parking": {"total_slots": 60, "slots_per_floor": 10},
+    "api": {"host": "0.0.0.0", "port": 5000, "refresh_interval_seconds": 5},
+    "spark": {"master": "spark://192.168.80.98:7077", "shuffle_partitions": 2}
+}
 
 # Spark Session global
 spark = None
@@ -61,27 +51,89 @@ is_spark_ready = False
 # ===========================
 # CONFIG MANAGEMENT
 # ===========================
-def load_price_config():
-    """Load giá từ config file"""
-    try:
-        if os.path.exists(PRICE_CONFIG_FILE):
-            with open(PRICE_CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-                return config.get("price_per_10min", DEFAULT_PRICE_PER_10MIN)
-    except Exception as e:
-        logger.error(f"Error loading price config: {e}")
-    return DEFAULT_PRICE_PER_10MIN
+def load_config():
+    """Load config từ JSON file"""
+    config = DEFAULT_CONFIG.copy()
+    
+    # Try to load from new config file
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                file_config = json.load(f)
+                # Merge với default config
+                for key in config:
+                    if key in file_config:
+                        if isinstance(config[key], dict) and isinstance(file_config[key], dict):
+                            config[key].update(file_config[key])
+                        else:
+                            config[key] = file_config[key]
+                logger.info(f"Loaded config from {CONFIG_FILE}")
+        except Exception as e:
+            logger.warning(f"Error loading config from {CONFIG_FILE}: {e}, using defaults")
+    
+    # Backward compatibility: check legacy price config file
+    if os.path.exists(LEGACY_PRICE_CONFIG_FILE):
+        try:
+            with open(LEGACY_PRICE_CONFIG_FILE, 'r') as f:
+                legacy_config = json.load(f)
+                if "price_per_10min" in legacy_config:
+                    config["price"]["price_per_10min"] = legacy_config["price_per_10min"]
+                    logger.info(f"Loaded price from legacy config: {config['price']['price_per_10min']:,} VND")
+        except Exception as e:
+            logger.warning(f"Error loading legacy price config: {e}")
+    
+    return config
 
-def save_price_config(price):
-    """Lưu giá vào config file"""
+def save_config(config):
+    """Lưu config vào JSON file"""
     try:
-        os.makedirs(os.path.dirname(PRICE_CONFIG_FILE), exist_ok=True)
-        with open(PRICE_CONFIG_FILE, 'w') as f:
-            json.dump({"price_per_10min": price, "updated_at": datetime.now().isoformat()}, f)
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        logger.info(f"Saved config to {CONFIG_FILE}")
         return True
     except Exception as e:
-        logger.error(f"Error saving price config: {e}")
+        logger.error(f"Error saving config: {e}")
         return False
+
+def load_price_config():
+    """Load giá từ config (backward compatibility)"""
+    config = load_config()
+    return config["price"]["price_per_10min"]
+
+def save_price_config(price):
+    """Cập nhật giá trong config file"""
+    config = load_config()
+    config["price"]["price_per_10min"] = int(price)
+    config["price"]["updated_at"] = datetime.now().isoformat()
+    return save_config(config)
+
+# ===========================
+# Load config on startup
+# ===========================
+app_config = load_config()
+TOTAL_SLOTS = app_config["parking"]["total_slots"]
+SLOTS_PER_FLOOR = app_config["parking"]["slots_per_floor"]
+API_PORT = app_config["api"]["port"]
+API_HOST = app_config["api"]["host"]
+SPARK_MASTER = app_config["spark"]["master"]
+SHUFFLE_PARTITIONS = app_config["spark"]["shuffle_partitions"]
+REFRESH_INTERVAL = app_config["api"]["refresh_interval_seconds"]
+
+# ===========================
+# GLOBAL DATA STORAGE
+# ===========================
+latest_parking_data = {
+    "data": [],
+    "stats": {
+        "total": TOTAL_SLOTS,
+        "occupied_locations": 0,  # Số vị trí bị chiếm
+        "unique_vehicles": 0,      # Số xe unique
+        "available": TOTAL_SLOTS
+    },
+    "last_update": None,
+    "error": None
+}
 
 def load_checkout_status():
     """Load danh sách xe đã checkout"""
@@ -129,8 +181,11 @@ def init_spark():
         
         spark = SparkSession.builder \
             .appName("ParkingAPIServer") \
-            .master("spark://192.168.1.13:7077") \
-            .config("spark.sql.shuffle.partitions", "2") \
+            .master(SPARK_MASTER) \
+            .config("spark.sql.shuffle.partitions", str(SHUFFLE_PARTITIONS)) \
+            .config("spark.hadoop.fs.defaultFS", "file:///") \
+            .config("spark.hadoop.fs.file.impl", "org.apache.hadoop.fs.LocalFileSystem") \
+            .config("spark.hadoop.fs.AbstractFileSystem.file.impl", "org.apache.hadoop.fs.local.LocalFs") \
             .getOrCreate()
         
         spark.sparkContext.setLogLevel("ERROR")
@@ -183,7 +238,7 @@ def update_parking_data():
                             f"Retry {retry_count + 1}/{max_retries}"
                         )
                         retry_count += 1
-                        time.sleep(5)
+                        time.sleep(REFRESH_INTERVAL)
                         continue
                     else:
                         error_msg = (
@@ -203,7 +258,7 @@ def update_parking_data():
                 # Đọc dữ liệu từ Parquet file
                 try:
                     # FIX: Retry nếu file đang được ghi (race condition)
-                    max_read_retries = 5
+                    max_read_retries = 3
                     df = None
                     last_error = None
                     
@@ -216,14 +271,51 @@ def update_parking_data():
                                     time.sleep(1)
                                     continue
                                 else:
-                                    raise Exception("Parquet file does not exist")
+                                    # Nếu file không tồn tại sau nhiều lần retry, skip và dùng data cũ
+                                    logger.warning(f"Parquet file not found after {max_read_retries} retries, using cached data")
+                                    continue
+                            
+                            # FIX: Tạo DataFrame mới mỗi lần, không cache
+                            # Sử dụng unpersist() và tạo DataFrame mới để tránh stale references
+                            try:
+                                # Clear any cached data
+                                spark.catalog.clearCache()
+                            except:
+                                pass
                             
                             # Đọc file với error handling tốt hơn
-                            df = spark.read.parquet(parquet_path)
+                            # FIX: Đọc lại từ đầu mỗi lần, không cache để tránh stale file references
+                            # Sử dụng option để không cache
+                            df = spark.read.option("recursiveFileLookup", "true").parquet(parquet_path)
                             
                             # Test đọc một vài rows để đảm bảo file hợp lệ
-                            _ = df.limit(1).collect()
-                            break
+                            # FIX: Dùng try-except riêng cho collect() để catch lỗi file not exist
+                            try:
+                                test_rows = df.limit(1).collect()
+                                # Nếu thành công, break khỏi retry loop
+                                break
+                            except Exception as collect_error:
+                                error_str = str(collect_error)
+                                # Nếu là lỗi file not exist, retry
+                                if any(keyword in error_str for keyword in [
+                                    "FILE_NOT_EXIST",
+                                    "File does not exist",
+                                    "underlying files have been updated"
+                                ]):
+                                    if read_retry < max_read_retries - 1:
+                                        logger.debug(
+                                            f"File being updated during read (attempt {read_retry + 1}/{max_read_retries}), retrying..."
+                                        )
+                                        time.sleep(2)
+                                        continue
+                                    else:
+                                        # Nếu retry hết, skip và dùng data cũ
+                                        logger.warning(f"File still being updated after {max_read_retries} retries, skipping this update")
+                                        df = None
+                                        break
+                                else:
+                                    # Lỗi khác, raise ngay
+                                    raise collect_error
                             
                         except Exception as read_error:
                             last_error = read_error
@@ -234,38 +326,63 @@ def update_parking_data():
                                 "does not exist", 
                                 "FileNotFoundException",
                                 "FAILED_READ_FILE",
-                                "underlying files have been updated"
+                                "FILE_NOT_EXIST",
+                                "underlying files have been updated",
+                                "File does not exist"
                             ]):
                                 if read_retry < max_read_retries - 1:
                                     logger.debug(
-                                        f"Parquet file being written or updated, "
-                                        f"retry {read_retry + 1}/{max_read_retries}"
+                                        f"Parquet file being written or updated (attempt {read_retry + 1}/{max_read_retries}): {error_str[:100]}"
                                     )
-                                    time.sleep(1)
+                                    # Tăng thời gian chờ giữa các retry
+                                    time.sleep(2)
                                     continue
+                                else:
+                                    # Nếu retry hết, skip và dùng data cũ
+                                    logger.warning(f"File still being updated after {max_read_retries} retries, skipping this update")
+                                    df = None
+                                    break
                             
                             # Nếu không phải lỗi file not found, raise ngay
                             if read_retry == max_read_retries - 1:
                                 raise read_error
                     
+                    # Nếu không đọc được file (df is None), skip update này và giữ data cũ
                     if df is None:
-                        raise Exception(f"Failed to read Parquet file after {max_read_retries} retries: {last_error}")
+                        logger.debug("Skipping data update due to file being written, keeping existing data")
+                        time.sleep(REFRESH_INTERVAL)
+                        continue
                     
                     # Filter và select columns
                     # NOTE: Parquet bao gồm cả EXITING, API có thể filter nếu cần
-                    df_filtered = df.filter(
-                        col("current_status").isNotNull()
-                    ).select(
-                        "location",
-                        "license_plate",
-                        "current_status",
-                        "entry_timestamp",
-                        "parked_minutes",
-                        "total_fee",
-                        "last_update"
-                    ).orderBy("location", "license_plate")
-                    
-                    rows = df_filtered.collect()
+                    try:
+                        df_filtered = df.filter(
+                            col("current_status").isNotNull()
+                        ).select(
+                            "location",
+                            "license_plate",
+                            "current_status",
+                            "entry_timestamp",
+                            "parked_minutes",
+                            "total_fee",
+                            "last_update"
+                        ).orderBy("location", "license_plate")
+                        
+                        # FIX: Wrap collect() trong try-except để catch lỗi file not exist
+                        rows = df_filtered.collect()
+                    except Exception as collect_error:
+                        error_str = str(collect_error)
+                        if any(keyword in error_str for keyword in [
+                            "FILE_NOT_EXIST",
+                            "File does not exist",
+                            "underlying files have been updated"
+                        ]):
+                            logger.warning(f"File was updated during processing, skipping this update: {error_str[:100]}")
+                            time.sleep(REFRESH_INTERVAL)
+                            continue
+                        else:
+                            # Lỗi khác, raise
+                            raise collect_error
                     
                     # FIX: Filter bỏ những xe đã checkout
                     checkout_status = load_checkout_status()
@@ -278,12 +395,11 @@ def update_parking_data():
                 except Exception as e:
                     logger.error(f"Error querying memory table: {e}")
                     latest_parking_data["error"] = f"Error querying table: {str(e)}"
-                    time.sleep(5)
+                    time.sleep(REFRESH_INTERVAL)
                     continue
                 
                 # Convert Spark Rows sang Python dict
                 data = []
-                total_revenue = 0
                 unique_vehicles = set()  # Track unique license plates
                 
                 for row in rows:
@@ -297,7 +413,6 @@ def update_parking_data():
                         "last_update": int(row.last_update) if row.last_update is not None else None
                     }
                     data.append(item)
-                    total_revenue += item["total_fee"]
                     
                     # Track unique vehicles
                     if item["license_plate"]:
@@ -306,11 +421,10 @@ def update_parking_data():
                 # Update global data
                 latest_parking_data["data"] = data
                 latest_parking_data["stats"] = {
-                    "total": 60,
+                    "total": TOTAL_SLOTS,
                     "occupied_locations": len(data),      # Số records = số vị trí
                     "unique_vehicles": len(unique_vehicles),  # Số xe unique
-                    "available": 60 - len(data),          # Số vị trí trống
-                    "totalRevenue": total_revenue
+                    "available": TOTAL_SLOTS - len(data)          # Số vị trí trống
                 }
                 latest_parking_data["last_update"] = int(time.time())
                 latest_parking_data["error"] = None
@@ -318,15 +432,14 @@ def update_parking_data():
                 if len(data) > 0:
                     logger.info(
                         f"Updated: {len(data)} records, "
-                        f"{len(unique_vehicles)} unique vehicles, "
-                        f"Revenue: {total_revenue:,} VND"
+                        f"{len(unique_vehicles)} unique vehicles"
                     )
                 
         except Exception as e:
             logger.error(f"Error updating data: {e}")
             latest_parking_data["error"] = str(e)
         
-        time.sleep(5)
+        time.sleep(REFRESH_INTERVAL)
 
 # ===========================
 # API ENDPOINTS
@@ -394,17 +507,15 @@ def get_floor_summary(floor):
     floor_upper = floor.upper()
     floor_data = [item for item in data if item["location"] and item["location"].startswith(floor_upper)]
     
-    total_revenue = sum(item["total_fee"] for item in floor_data)
     unique_vehicles_in_floor = len(set(item["license_plate"] for item in floor_data if item["license_plate"]))
     
     return jsonify({
         "floor": floor_upper,
-        "total_slots": 10,
+        "total_slots": SLOTS_PER_FLOOR,
         "occupied_locations": len(floor_data),  # Số vị trí bị chiếm
         "unique_vehicles": unique_vehicles_in_floor,  # Số xe unique
-        "available": 10 - len(floor_data),
-        "vehicles": floor_data,
-        "total_revenue": total_revenue
+        "available": SLOTS_PER_FLOOR - len(floor_data),
+        "vehicles": floor_data
     })
 
 @app.route('/api/parking/vehicle/<license_plate>', methods=['GET'])
@@ -455,39 +566,6 @@ def health_check():
         "unique_vehicles": latest_parking_data["stats"]["unique_vehicles"],
         "error": latest_parking_data["error"]
     })
-
-@app.route('/api/parking/price', methods=['GET'])
-def get_price():
-    """Lấy giá hiện tại"""
-    price = load_price_config()
-    return jsonify({
-        "price_per_10min": price,
-        "currency": "VND"
-    })
-
-@app.route('/api/parking/price', methods=['POST'])
-def update_price():
-    """Cập nhật giá"""
-    try:
-        data = request.get_json()
-        new_price = data.get("price_per_10min")
-        
-        if new_price is None or not isinstance(new_price, (int, float)) or new_price <= 0:
-            return jsonify({"error": "Invalid price. Must be a positive number"}), 400
-        
-        if save_price_config(int(new_price)):
-            logger.info(f"Price updated to {new_price} VND per 10 minutes")
-            return jsonify({
-                "success": True,
-                "price_per_10min": int(new_price),
-                "message": "Price updated successfully"
-            })
-        else:
-            return jsonify({"error": "Failed to save price config"}), 500
-            
-    except Exception as e:
-        logger.error(f"Error updating price: {e}")
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/parking/checkout', methods=['POST'])
 def confirm_checkout():
@@ -590,4 +668,4 @@ if __name__ == '__main__':
     print("=" * 80 + "\n")
     
     # Run Flask server
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    app.run(host=API_HOST, port=API_PORT, debug=False, threaded=True)

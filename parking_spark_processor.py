@@ -19,6 +19,7 @@ from pyspark.sql.types import *
 import logging
 import os
 import json
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,27 +27,78 @@ logger = logging.getLogger(__name__)
 # ===========================
 # CONFIG
 # ===========================
-KAFKA_BOOTSTRAP = "192.168.1.9:9092"
-KAFKA_TOPIC = "parking-events"
-DEFAULT_PRICE_PER_10MIN = 5000
-PRICE_CONFIG_FILE = "/opt/shared/parking_price_config.json"
-CHECKPOINT_DIR = "/tmp/checkpoint_parking"
+CONFIG_FILE = "/opt/shared/parking_config.json"
+LEGACY_PRICE_CONFIG_FILE = "/opt/shared/parking_price_config.json"  # Backward compatibility
 
-def load_price_config():
-    """Load giá từ config file"""
+# Default values
+DEFAULT_CONFIG = {
+    "price": {"price_per_10min": 5000, "currency": "VND"},
+    "kafka": {"bootstrap_servers": "192.168.80.98:9092", "topic": "parking-events"},
+    "spark": {"master": "spark://192.168.80.98:7077", "checkpoint_dir": "/tmp/checkpoint_parking", "shuffle_partitions": 2},
+    "streaming": {"processing_interval_seconds": 5, "console_interval_seconds": 10}
+}
+
+def load_config():
+    """Load config từ JSON file"""
+    config = DEFAULT_CONFIG.copy()
+    
+    # Try to load from new config file
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                file_config = json.load(f)
+                # Merge với default config
+                for key in config:
+                    if key in file_config:
+                        config[key].update(file_config[key])
+                logger.info(f"Loaded config from {CONFIG_FILE}")
+        except Exception as e:
+            logger.warning(f"Error loading config from {CONFIG_FILE}: {e}, using defaults")
+    
+    # Backward compatibility: check legacy price config file
+    if os.path.exists(LEGACY_PRICE_CONFIG_FILE):
+        try:
+            with open(LEGACY_PRICE_CONFIG_FILE, 'r') as f:
+                legacy_config = json.load(f)
+                if "price_per_10min" in legacy_config:
+                    config["price"]["price_per_10min"] = legacy_config["price_per_10min"]
+                    logger.info(f"Loaded price from legacy config: {config['price']['price_per_10min']:,} VND")
+        except Exception as e:
+            logger.warning(f"Error loading legacy price config: {e}")
+    
+    return config
+
+def save_config(config):
+    """Lưu config vào JSON file"""
     try:
-        if os.path.exists(PRICE_CONFIG_FILE):
-            with open(PRICE_CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-                price = config.get("price_per_10min", DEFAULT_PRICE_PER_10MIN)
-                logger.info(f"Loaded price from config: {price:,} VND per 10 minutes")
-                return price
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        logger.info(f"Saved config to {CONFIG_FILE}")
+        return True
     except Exception as e:
-        logger.warning(f"Error loading price config: {e}, using default: {DEFAULT_PRICE_PER_10MIN}")
-    return DEFAULT_PRICE_PER_10MIN
+        logger.error(f"Error saving config: {e}")
+        return False
 
-# Load price on startup
-PRICE_PER_10MIN = load_price_config()
+def update_price_in_config(new_price):
+    """Cập nhật giá trong config file"""
+    config = load_config()
+    config["price"]["price_per_10min"] = int(new_price)
+    config["price"]["updated_at"] = datetime.now().isoformat()
+    return save_config(config)
+
+# Load config on startup
+app_config = load_config()
+KAFKA_BOOTSTRAP = app_config["kafka"]["bootstrap_servers"]
+KAFKA_TOPIC = app_config["kafka"]["topic"]
+PRICE_PER_10MIN = app_config["price"]["price_per_10min"]
+CHECKPOINT_DIR = app_config["spark"]["checkpoint_dir"]
+SPARK_MASTER = app_config["spark"]["master"]
+SHUFFLE_PARTITIONS = app_config["spark"]["shuffle_partitions"]
+PROCESSING_INTERVAL = app_config["streaming"]["processing_interval_seconds"]
+CONSOLE_INTERVAL = app_config["streaming"]["console_interval_seconds"]
+
+logger.info(f"Config loaded: Price={PRICE_PER_10MIN:,} VND/10min, Kafka={KAFKA_BOOTSTRAP}, Topic={KAFKA_TOPIC}")
 
 # ===========================
 # SPARK
@@ -54,9 +106,12 @@ PRICE_PER_10MIN = load_price_config()
 spark = SparkSession.builder \
     .appName("ParkingCameraSystem") \
     .config("spark.sql.streaming.checkpointLocation", CHECKPOINT_DIR) \
-    .config("spark.sql.shuffle.partitions", "2") \
+    .config("spark.sql.shuffle.partitions", str(SHUFFLE_PARTITIONS)) \
     .config("spark.sql.adaptive.enabled", "false") \
-    .master("spark://192.168.1.13:7077") \
+    .config("spark.hadoop.fs.defaultFS", "file:///") \
+    .config("spark.hadoop.fs.file.impl", "org.apache.hadoop.fs.LocalFileSystem") \
+    .config("spark.hadoop.fs.AbstractFileSystem.file.impl", "org.apache.hadoop.fs.local.LocalFs") \
+    .master(SPARK_MASTER) \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
@@ -197,7 +252,7 @@ memory_query = active_vehicles.writeStream \
     .outputMode("complete") \
     .format("memory") \
     .queryName("parking_realtime") \
-    .trigger(processingTime="5 seconds") \
+    .trigger(processingTime=f"{PROCESSING_INTERVAL} seconds") \
     .start()
 
 # Stream 1b: Ghi ra Parquet file để share với API server
@@ -215,7 +270,8 @@ def write_to_parquet(batch_df, batch_id):
         
         # Reload price config mỗi batch để cập nhật giá mới
         global PRICE_PER_10MIN
-        PRICE_PER_10MIN = load_price_config()
+        app_config = load_config()
+        PRICE_PER_10MIN = app_config["price"]["price_per_10min"]
         
         temp_path = f"{parquet_output_path}_temp_{int(time_module.time())}"
         final_path = parquet_output_path
@@ -234,15 +290,33 @@ def write_to_parquet(batch_df, batch_id):
             # Ghi vào file tạm với timestamp unique
             batch_df.coalesce(1).write.mode("overwrite").parquet(temp_path)
             
-            # Đợi một chút để đảm bảo file đã được ghi xong
-            time_module.sleep(0.1)
+            # Đợi một chút để đảm bảo file đã được ghi xong hoàn toàn
+            time_module.sleep(0.5)
+            
+            # FIX: Kiểm tra file tạm đã tồn tại và có dữ liệu trước khi xóa file cũ
+            if not os.path.exists(temp_path):
+                raise Exception(f"Temp file {temp_path} was not created")
+            
+            # Kiểm tra file tạm có ít nhất 1 file parquet bên trong
+            temp_files = [f for f in os.listdir(temp_path) if f.endswith('.parquet')]
+            if not temp_files:
+                raise Exception(f"Temp file {temp_path} does not contain parquet files")
             
             # Xóa file cũ và rename file tạm (atomic operation)
+            # FIX: Chỉ xóa file cũ sau khi file tạm đã sẵn sàng
             if os.path.exists(final_path):
-                shutil.rmtree(final_path)
+                try:
+                    shutil.rmtree(final_path)
+                    # Đợi một chút để đảm bảo xóa hoàn tất
+                    time_module.sleep(0.2)
+                except Exception as e:
+                    logger.warning(f"Error removing old file {final_path}: {e}")
             
             # Rename atomic
             os.rename(temp_path, final_path)
+            
+            # Đợi thêm một chút để đảm bảo rename hoàn tất
+            time_module.sleep(0.2)
             
             logger.debug(f"Updated Parquet file at {final_path} (batch {batch_id}, {batch_df.count()} rows, Price: {PRICE_PER_10MIN:,} VND/10min)")
         except Exception as e:
@@ -258,7 +332,7 @@ def write_to_parquet(batch_df, batch_id):
 parquet_query = all_vehicles_for_parquet.writeStream \
     .foreachBatch(write_to_parquet) \
     .outputMode("complete") \
-    .trigger(processingTime="5 seconds") \
+    .trigger(processingTime=f"{PROCESSING_INTERVAL} seconds") \
     .start()
 logger.info(f"✓ Parquet output started: {parquet_output_path} (includes EXITING)")
 
@@ -268,7 +342,7 @@ console_query = active_vehicles.writeStream \
     .format("console") \
     .option("truncate", "false") \
     .option("numRows", 30) \
-    .trigger(processingTime="10 seconds") \
+    .trigger(processingTime=f"{CONSOLE_INTERVAL} seconds") \
     .start()
 
 # ===========================
@@ -306,7 +380,7 @@ def process_checkout_batch(batch_df, batch_id):
 checkout_query = checkout_records.writeStream \
     .foreachBatch(process_checkout_batch) \
     .outputMode("update") \
-    .trigger(processingTime="5 seconds") \
+    .trigger(processingTime=f"{PROCESSING_INTERVAL} seconds") \
     .start()
 
 # ===========================

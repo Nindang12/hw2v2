@@ -6,11 +6,15 @@
     <title>Quản lý Bãi Đỗ Xe - Camera System</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            height: 100%;
+        }
         body {
             font-family: Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             padding: 20px;
             min-height: 100vh;
+            overflow: auto;
         }
         .container { max-width: 1600px; margin: 0 auto; }
         .header {
@@ -40,7 +44,6 @@
         .stat-card.locations { border-left: 5px solid #e74c3c; }
         .stat-card.vehicles { border-left: 5px solid #f39c12; }
         .stat-card.available { border-left: 5px solid #2ecc71; }
-        .stat-card.revenue { border-left: 5px solid #9b59b6; }
         
         .floor-overview {
             background: white;
@@ -65,12 +68,61 @@
         .progress-bar { background: #e0e0e0; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 10px; }
         .progress-fill { background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; transition: width 0.5s; }
         
-        .vehicles-section {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        /* -- Column Layout for location and vehicle tables -- */
+        .vehicles-main-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
         }
+        .vehicles-table-content {
+            flex: 1 1 auto;
+            overflow-y: auto;
+            overflow-x: auto;
+            min-height: 100px;
+            max-height: 510px;
+        }
+        .vehicles-section .title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .vehicles-section::-webkit-scrollbar,
+        .vehicles-table-content::-webkit-scrollbar{
+            width: 10px;
+        }
+        .vehicles-section::-webkit-scrollbar-thumb,
+        .vehicles-table-content::-webkit-scrollbar-thumb{
+            background: #ccc;
+            border-radius: 8px;
+        }
+        .vehicles-section::-webkit-scrollbar-track,
+        .vehicles-table-content::-webkit-scrollbar-track{
+            background: #f1f1f1;
+            border-radius: 8px;
+        }
+
+        /* Show scrollbar for #vehiclesLocationTable and #vehiclesSummaryTable */
+        #vehiclesLocationTable, #vehiclesSummaryTable {
+            scrollbar-width: thin;
+            scrollbar-color: #ccc #f1f1f1;
+        }
+        #vehiclesLocationTable::-webkit-scrollbar,
+        #vehiclesSummaryTable::-webkit-scrollbar {
+            width: 10px;
+            background: #f1f1f1;
+        }
+        #vehiclesLocationTable::-webkit-scrollbar-thumb,
+        #vehiclesSummaryTable::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 8px;
+        }
+        #vehiclesLocationTable::-webkit-scrollbar-track,
+        #vehiclesSummaryTable::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 8px;
+        }
+
         .btn {
             background: #667eea;
             color: white;
@@ -82,7 +134,12 @@
         }
         .btn:hover { background: #764ba2; }
         
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        .table-scroll {
+            overflow-x: auto;
+            width: 100%;
+        }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; min-width: 850px; }
         thead { background: #f8f9fa; }
         th, td { padding: 15px; text-align: left; border-bottom: 1px solid #f0f0f0; }
         tbody tr:hover { background: #f8f9fa; }
@@ -126,36 +183,6 @@
             font-size: 14px;
         }
 
-        .header .price-control {
-            margin-top: 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .header .price-control input {
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 14px;
-            width: 120px;
-        }
-
-        .header .price-control button {
-            padding: 8px 16px;
-            background: #2ecc71;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-
-        .header .price-control button:hover {
-            background: #27ae60;
-        }
-
         .checkout-btn {
             background: #e74c3c !important;
             color: white;
@@ -166,19 +193,25 @@
             font-size: 12px;
             font-weight: 600;
         }
-
         .checkout-btn:hover {
             background: #c0392b !important;
         }
-
         .checkout-btn:disabled {
             background: #95a5a6 !important;
             cursor: not-allowed;
         }
-
         .status-EXITING {
             background: #ffebee;
             color: #c62828;
+        }
+        /* Responsive: stack columns on mobile */
+        @media (max-width: 1100px) {
+            .vehicles-main-grid {
+                flex-direction: column;
+            }
+            .vehicles-section {
+                max-height: 500px;
+            }
         }
     </style>
 </head>
@@ -190,13 +223,6 @@
             <div class="subtitle">
                 Cập nhật: <span id="lastUpdate">-</span> • 
                 GroupBy (location, license_plate)
-            </div>
-            <div class="price-control">
-                <label><strong>Giá hiện tại:</strong></label>
-                <input type="number" id="priceInput" value="5000" min="1000" step="1000">
-                <span>VND / 10 phút</span>
-                <button onclick="updatePrice()">💾 Cập nhật giá</button>
-                <span id="priceStatus" style="color: #2ecc71; font-size: 12px;"></span>
             </div>
         </div>
 
@@ -227,10 +253,6 @@
                 <div class="label">Còn trống</div>
                 <div class="value" id="statAvailable">-</div>
             </div>
-            <div class="stat-card revenue">
-                <div class="label">Tổng doanh thu</div>
-                <div class="value" id="statRevenue">-</div>
-            </div>
         </div>
 
         <!-- Floor Overview -->
@@ -239,19 +261,45 @@
             <div class="floors-grid" id="floorsGrid"></div>
         </div>
 
-        <!-- Vehicles Table -->
-        <div class="vehicles-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h2>🚗 Chi tiết vị trí đỗ xe (Location-based view)</h2>
-                <button class="btn" onclick="loadData()">🔄 Làm mới</button>
+        <!-- Vehicles Tables in column arrangement (side by side) -->
+        <div class="vehicles-main-grid">
+            <!-- Location-based section -->
+            <div class="vehicles-section">
+                <div class="title-row">
+                    <h2>🚗 Chi tiết vị trí đỗ xe (Location-based view)</h2>
+                    <button class="btn" onclick="loadData()">🔄 Làm mới</button>
+                </div>
+                <div class="vehicles-table-content" id="vehiclesLocationTable">
+                    <!-- Content injected by JS -->
+                </div>
             </div>
-            <div id="vehiclesTable"></div>
+            <!-- Vehicle Summary section -->
+            <div class="vehicles-section">
+                <div class="title-row">
+                    <h2>🚗 Tổng hợp theo xe (Vehicle-based Summary)</h2>
+                </div>
+                <div class="vehicles-table-content" id="vehiclesSummaryTable">
+                    <!-- Content injected by JS -->
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
         const API_BASE = 'http://localhost:5000';
         const FLOORS = ['A', 'B', 'C', 'D', 'E', 'F'];
+        
+        // Global variable to store current data
+        let currentData = {
+            data: [],
+            stats: {
+                total: 60,
+                occupied_locations: 0,
+                unique_vehicles: 0,
+                available: 60
+            },
+            last_update: null
+        };
 
         function formatCurrency(amount) {
             return new Intl.NumberFormat('vi-VN', {
@@ -322,19 +370,24 @@
             return Object.values(grouped);
         }
 
-        function updateVehiclesTable(vehicles) {
-            const container = document.getElementById('vehiclesTable');
+        function updateStats(stats) {
+            document.getElementById('statTotal').textContent = stats.total;
+            document.getElementById('statOccupiedLocations').textContent = stats.occupied_locations;
+            document.getElementById('statUniqueVehicles').textContent = stats.unique_vehicles;
+            document.getElementById('statAvailable').textContent = stats.available;
+        }
 
+        // Table 1: Chi tiết vị trí đỗ xe (Location-based)
+        function updateVehiclesLocationTable(vehicles) {
+            const container = document.getElementById('vehiclesLocationTable');
+            if (!container) return;
             if (vehicles.length === 0) {
                 container.innerHTML = '<p style="text-align:center; padding:40px; color:#999;">Chưa có xe trong bãi</p>';
                 return;
             }
-
-            // Group by vehicle để hiển thị
-            const vehicleGroups = groupByVehicle(vehicles);
-
             let html = `
                 <h3 style="margin-bottom: 15px;">📍 Xem theo vị trí (${vehicles.length} records)</h3>
+                <div class="table-scroll">
                 <table>
                     <thead>
                         <tr>
@@ -349,7 +402,6 @@
                     </thead>
                     <tbody>
             `;
-
             vehicles.forEach(v => {
                 const isExiting = v.current_status === 'EXITING';
                 html += `
@@ -372,11 +424,24 @@
                 `;
             });
 
-            html += '</tbody></table>';
-            
-            // Add vehicle summary
-            html += `
-                <h3 style="margin-top: 30px; margin-bottom: 15px;">🚗 Tổng hợp theo xe (${vehicleGroups.length} vehicles)</h3>
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+
+        // Table 2: Tổng hợp theo xe (Vehicle-based)
+        function updateVehiclesSummaryTable(vehicles) {
+            const container = document.getElementById('vehiclesSummaryTable');
+            if (!container) return;
+            if (vehicles.length === 0) {
+                container.innerHTML = '<p style="text-align:center; padding:40px; color:#999;">Chưa có xe trong bãi</p>';
+                return;
+            }
+            // Group by vehicle để hiển thị
+            const vehicleGroups = groupByVehicle(vehicles);
+
+            let html = `
+                <h3 style="margin-bottom: 15px;">🚗 Tổng hợp theo xe (${vehicleGroups.length} vehicles)</h3>
+                <div class="table-scroll">
                 <table>
                     <thead>
                         <tr>
@@ -388,7 +453,6 @@
                     </thead>
                     <tbody>
             `;
-            
             vehicleGroups.forEach(vg => {
                 const locationDetails = vg.locations.map(loc => 
                     `${loc.location} (${formatTime(loc.minutes)}, ${formatCurrency(loc.fee)})`
@@ -403,9 +467,26 @@
                     </tr>
                 `;
             });
-
-            html += '</tbody></table>';
+            html += '</tbody></table></div>';
             container.innerHTML = html;
+        }
+
+        function updateUI(data) {
+            // Update stats
+            updateStats(data.stats);
+
+            // Update last update time
+            if (data.last_update) {
+                const time = new Date(data.last_update * 1000);
+                document.getElementById('lastUpdate').textContent = time.toLocaleTimeString('vi-VN');
+            }
+
+            // Update floor overview
+            updateFloorOverview(data.data);
+
+            // Update separated tables
+            updateVehiclesLocationTable(data.data);
+            updateVehiclesSummaryTable(data.data);
         }
 
         async function loadData() {
@@ -427,24 +508,11 @@
                     document.getElementById('errorMessage').style.display = 'block';
                 }
 
-                // Update stats
-                document.getElementById('statTotal').textContent = data.stats.total;
-                document.getElementById('statOccupiedLocations').textContent = data.stats.occupied_locations;
-                document.getElementById('statUniqueVehicles').textContent = data.stats.unique_vehicles;
-                document.getElementById('statAvailable').textContent = data.stats.available;
-                document.getElementById('statRevenue').textContent = formatCurrency(data.stats.totalRevenue);
+                // Save to global variable
+                currentData = data;
 
-                // Update last update time
-                if (data.last_update) {
-                    const time = new Date(data.last_update * 1000);
-                    document.getElementById('lastUpdate').textContent = time.toLocaleTimeString('vi-VN');
-                }
-
-                // Update floor overview
-                updateFloorOverview(data.data);
-
-                // Update vehicles table
-                updateVehiclesTable(data.data);
+                // Update UI
+                updateUI(data);
 
             } catch (error) {
                 console.error('Error:', error);
@@ -454,57 +522,6 @@
             }
         }
 
-        // Load price on startup
-        async function loadPrice() {
-            try {
-                const response = await fetch(`${API_BASE}/api/parking/price`);
-                const data = await response.json();
-                if (data.price_per_10min) {
-                    document.getElementById('priceInput').value = data.price_per_10min;
-                }
-            } catch (error) {
-                console.error('Error loading price:', error);
-            }
-        }
-
-        // Update price
-        async function updatePrice() {
-            const priceInput = document.getElementById('priceInput');
-            const priceStatus = document.getElementById('priceStatus');
-            const newPrice = parseInt(priceInput.value);
-            
-            if (!newPrice || newPrice < 1000) {
-                priceStatus.textContent = '❌ Giá phải >= 1,000 VND';
-                priceStatus.style.color = '#e74c3c';
-                return;
-            }
-            
-            try {
-                const response = await fetch(`${API_BASE}/api/parking/price`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ price_per_10min: newPrice })
-                });
-                
-                const data = await response.json();
-                if (data.success) {
-                    priceStatus.textContent = '✓ Đã cập nhật';
-                    priceStatus.style.color = '#2ecc71';
-                    setTimeout(() => {
-                        priceStatus.textContent = '';
-                    }, 3000);
-                } else {
-                    priceStatus.textContent = '❌ Lỗi: ' + (data.error || 'Unknown error');
-                    priceStatus.style.color = '#e74c3c';
-                }
-            } catch (error) {
-                priceStatus.textContent = '❌ Lỗi kết nối';
-                priceStatus.style.color = '#e74c3c';
-                console.error('Error updating price:', error);
-            }
-        }
 
         // Confirm checkout
         async function confirmCheckout(licensePlate, location, totalFee) {
@@ -526,8 +543,34 @@
                 
                 const data = await response.json();
                 if (data.success) {
-                    alert(`✅ Đã xác nhận thanh toán!\nXe ${licensePlate} đã được xóa khỏi hệ thống.`);
-                    // Reload data
+                    // Xóa xe khỏi data local ngay lập tức
+                    currentData.data = currentData.data.filter(v => 
+                        !(v.license_plate && v.license_plate.toUpperCase() === licensePlate.toUpperCase() &&
+                          v.location && v.location.toUpperCase() === location.toUpperCase())
+                    );
+                    
+                    // Tính lại stats
+                    const unique_vehicles = new Set(
+                        currentData.data.filter(v => v.license_plate).map(v => v.license_plate)
+                    );
+                    currentData.stats = {
+                        total: 60,
+                        occupied_locations: currentData.data.length,
+                        unique_vehicles: unique_vehicles.size,
+                        available: 60 - currentData.data.length
+                    };
+                    
+                    // Cập nhật UI ngay lập tức
+                    updateUI(currentData);
+                    
+                    // Hiển thị thông báo thành công (không dùng alert để không làm gián đoạn)
+                    const successMsg = document.createElement('div');
+                    successMsg.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #2ecc71; color: white; padding: 15px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 1000;';
+                    successMsg.textContent = `✅ Đã xác nhận thanh toán cho xe ${licensePlate} tại ${location}`;
+                    document.body.appendChild(successMsg);
+                    setTimeout(() => successMsg.remove(), 3000);
+                    
+                    // Đồng bộ với server (chạy ngầm, không block UI)
                     loadData();
                 } else {
                     alert('❌ Lỗi: ' + (data.error || 'Unknown error'));
@@ -539,7 +582,6 @@
         }
 
         // Auto refresh every 5 seconds
-        loadPrice();
         loadData();
         setInterval(loadData, 5000);
 
